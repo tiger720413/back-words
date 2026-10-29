@@ -445,23 +445,32 @@ function fmtDue(due){
 }
 /* 朗读英文:优先 en-US 语音;voices 是异步加载的,缓存并在每次朗读前刷新 */
 let voiceList = [];
+let curAudio = null;
 function refreshVoices(){ try{ voiceList = speechSynthesis.getVoices(); }catch(e){} }
 if('speechSynthesis' in window){
   refreshVoices();
   speechSynthesis.onvoiceschanged = refreshVoices;
 }
 function speak(text){
+  /* 优先播放谷歌 TTS 的完整音频(<audio> 不受跨域限制):不卡音、不吞开头;
+     音频失败(如手机网络无代理)则退回浏览器语音 */
+  if(curAudio){ try{ curAudio.pause(); }catch(e){} curAudio = null; }
+  const a = new Audio(`https://translate.googleapis.com/translate_tts?client=gtx&tl=en&q=${encodeURIComponent(text)}`);
+  curAudio = a;
+  a.onended = () => { if(curAudio === a) curAudio = null; };
+  a.onerror = () => { if(curAudio === a) curAudio = null; speakFallback(text); };
+  a.play().catch(() => { if(curAudio === a) curAudio = null; speakFallback(text); });
+}
+function speakFallback(text){
   if(!('speechSynthesis' in window)) return;
   const ss = speechSynthesis;
   ss.cancel();
   refreshVoices();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US'; u.rate = 0.9;
-  // 优先网络语音:这台 Mac 的 Chrome 本地语音引擎静默(诊断实测),Google 在线语音正常
   const v = voiceList.find(v => v.lang.startsWith('en') && !v.localService)
          || voiceList.find(v => v.lang.startsWith('en') && v.localService);
-  if(v) u.voice = v;   // 找不到英语语音就不设,交给 Chrome 默认
-  // Chrome 两个经典 bug:闲置后会 paused 需 resume;cancel 后立刻 speak 可能静默
+  if(v) u.voice = v;
   if(ss.paused) ss.resume();
   setTimeout(() => ss.speak(u), 50);
 }
