@@ -452,9 +452,16 @@ if('speechSynthesis' in window){
   speechSynthesis.onvoiceschanged = refreshVoices;
 }
 function speak(text){
-  /* 优先播放谷歌 TTS 的完整音频(<audio> 不受跨域限制):不卡音、不吞开头;
-     音频失败(如手机网络无代理)则退回浏览器语音 */
+  /* 三级发音源:有道直连(0.3秒,不走代理不卡)→ 谷歌TTS(需代理)→ 浏览器语音。
+     全部播完整音频文件,不卡音不吞开头 */
   if(curAudio){ try{ curAudio.pause(); }catch(e){} curAudio = null; }
+  const a = new Audio(`https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(text)}&type=2`);
+  curAudio = a;
+  a.onended = () => { if(curAudio === a) curAudio = null; };
+  a.onerror = () => { if(curAudio === a) curAudio = null; speakG(text); };
+  a.play().catch(() => { if(curAudio === a) curAudio = null; speakG(text); });
+}
+function speakG(text){
   const a = new Audio(`https://translate.googleapis.com/translate_tts?client=gtx&tl=en&q=${encodeURIComponent(text)}`);
   curAudio = a;
   a.onended = () => { if(curAudio === a) curAudio = null; };
