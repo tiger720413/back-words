@@ -457,10 +457,10 @@ function speak(text){
   refreshVoices();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US'; u.rate = 0.9;
-  // 必须优先本地语音:网络语音(Google 在线)依赖外网,连不上就静默
-  const v = voiceList.find(v => v.lang.startsWith('en') && v.localService)
-         || voiceList.find(v => v.lang.startsWith('en') && !v.localService);
-  if(v) u.voice = v;   // 找不到英语语音就不设,让 Chrome 用系统默认(通常有声)
+  // 优先网络语音:这台 Mac 的 Chrome 本地语音引擎静默(诊断实测),Google 在线语音正常
+  const v = voiceList.find(v => v.lang.startsWith('en') && !v.localService)
+         || voiceList.find(v => v.lang.startsWith('en') && v.localService);
+  if(v) u.voice = v;   // 找不到英语语音就不设,交给 Chrome 默认
   // Chrome 两个经典 bug:闲置后会 paused 需 resume;cancel 后立刻 speak 可能静默
   if(ss.paused) ss.resume();
   setTimeout(() => ss.speak(u), 50);
