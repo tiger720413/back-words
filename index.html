@@ -452,13 +452,16 @@ if('speechSynthesis' in window){
 }
 function speak(text){
   if(!('speechSynthesis' in window)) return;
-  speechSynthesis.cancel();
+  const ss = speechSynthesis;
+  ss.cancel();
   refreshVoices();
   const u = new SpeechSynthesisUtterance(text);
   u.lang = 'en-US'; u.rate = 0.9;
   const v = voiceList.find(v => v.lang === 'en-US') || voiceList.find(v => v.lang.startsWith('en'));
   if(v) u.voice = v;
-  speechSynthesis.speak(u);
+  // Chrome 两个经典 bug:闲置后会 paused 需 resume;cancel 后立刻 speak 可能静默
+  if(ss.paused) ss.resume();
+  setTimeout(() => ss.speak(u), 50);
 }
 
 /* ================= 页面切换 ================= */
