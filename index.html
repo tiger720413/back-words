@@ -910,6 +910,14 @@ async function doLookup(){
       if(parts.length) meaning = parts.join(' / ');
       if(!meaning) meaning = g.value.sentences[0].trans || '';
     }
+    if(!meaning){
+      // 谷歌不通(如手机无代理):有道 suggest 直连兜底,国内网络可用
+      try{
+        const y = await fetch(`https://dict.youdao.com/suggest?num=1&ver=3.0&doctype=json&q=${encodeURIComponent(w)}`).then(r => r.json());
+        const ex = y?.data?.entries?.[0]?.explain;
+        if(ex) meaning = ex;
+      }catch(e){}
+    }
     if(d.status === 'fulfilled' && Array.isArray(d.value) && d.value[0]){
       const e = d.value[0];
       phonetic = e.phonetic || (e.phonetics || []).map(p => p.text).find(Boolean) || '';
