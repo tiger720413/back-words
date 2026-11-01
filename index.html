@@ -93,6 +93,21 @@
   .chip.new{background:var(--green-bg);color:var(--green)}
   .chip.due{background:var(--red-bg);color:var(--red)}
   .chip.ok{background:#eef2fb;color:var(--muted)}
+
+  /* 记忆进度条 */
+  .prog-track{display:flex;height:10px;border-radius:5px;overflow:hidden;background:#e8edf5;margin:8px 0 6px}
+  .prog-track i{height:100%;transition:width .3s}
+  .prog-known{background:var(--green)}
+  .prog-learning{background:var(--blue)}
+  .prog-new{background:#d8e0ee}
+  /* 例句 */
+  .r-ex{margin-top:12px;padding:12px;background:#f5f8fd;border-radius:10px;font-size:14px;line-height:1.6;color:#54607a}
+  .r-ex .ex-cn{color:var(--muted);margin-top:4px;font-size:13px}
+  /* 记忆阶段标签 */
+  .stage-tag{display:inline-block;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:8px;vertical-align:middle;font-weight:600}
+  .stage-new{background:#eef2fb;color:var(--muted)}
+  .stage-learn{background:var(--amber-bg);color:var(--amber)}
+  .stage-known{background:var(--green-bg);color:var(--green)}
   .icon-btn{flex-shrink:0;background:transparent;font-size:16px;color:#b7c0d0;padding:4px}
   .icon-btn:hover{color:var(--red)}
   .icon-btn.spk:hover{color:var(--blue)}
@@ -188,6 +203,12 @@
       <div class="stat"><div class="num" id="st-due">0</div><div class="label">今日待复习</div></div>
       <div class="stat"><div class="num new" id="st-new">0</div><div class="label">新词未学</div></div>
       <div class="stat"><div class="num" id="st-streak">0</div><div class="label">连续天数 🔥</div></div>
+    </div>
+
+    <div class="card">
+      <h3>记忆进度</h3>
+      <div class="prog-track" id="mem-track"><i class="prog-known" style="width:0"></i><i class="prog-learning" style="width:0"></i><i class="prog-new" style="width:0"></i></div>
+      <p class="hint" id="mem-text">还没有单词,先去词库页添加吧</p>
     </div>
 
     <div class="card">
@@ -482,6 +503,43 @@ function speakFallback(text){
   setTimeout(() => ss.speak(u), 50);
 }
 
+/* ===== 例句与记忆标签 ===== */
+function stageTag(w){
+  return !w.reps ? '<span class="stage-tag stage-new">新词</span>'
+    : w.stage >= 2 ? '<span class="stage-tag stage-known">已记住</span>'
+    : '<span class="stage-tag stage-learn">学习中</span>';
+}
+/* 抓单词例句(英文+中文翻译),失败返回 null */
+async function grabExample(word){
+  try{
+    const r = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&hl=zh-CN&dt=t&dt=ex&dj=1&q=${encodeURIComponent(word)}`);
+    const d = await r.json();
+    const ex = d?.examples?.example?.[0]?.text;
+    if(!ex) return null;
+    const example = ex.replace(/<[^>]+>/g, '').trim();
+    let exampleCn = '';
+    try{
+      const r2 = await fetch(`https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&dj=1&q=${encodeURIComponent(example)}`);
+      const d2 = await r2.json();
+      exampleCn = (d2?.sentences?.[0]?.trans || '').trim();
+    }catch(e){}
+    return { example, exampleCn };
+  }catch(e){ return null; }
+}
+/* 学习卡里给没有例句的词补例句(一次抓到就存词库) */
+async function ensureExample(w){
+  const ex = await grabExample(w.word);
+  if(ex){ w.example = ex.example; w.exampleCn = ex.exampleCn; save(); }
+}
+function fillExample(w){
+  const box = $('#ex-box'); if(!box) return;
+  const render = () => box.innerHTML = w.example
+    ? `📖 ${esc(w.example)}${w.exampleCn ? `<div class="ex-cn">${esc(w.exampleCn)}</div>` : ''}`
+    : '📖 暂无例句(可去词库页重新查词补充)';
+  if(w.example){ render(); return; }
+  ensureExample(w).then(render);
+}
+
 /* ================= 页面切换 ================= */
 function showTab(name){
   $$('.tabbar button').forEach(b => b.classList.toggle('on', b.dataset.tab === name));
@@ -503,6 +561,18 @@ function renderHome(){
   $('#st-due').textContent = dueCount();
   $('#st-new').textContent = newCount();
   $('#st-streak').textContent = DB.stats.streak;
+  // 记忆进度条:绿=已记住(连续2次认识) 蓝=学习中 灰=未学
+  const total = DB.words.length;
+  const known = DB.words.filter(w => w.stage >= 2).length;
+  const learning = DB.words.filter(w => w.reps > 0 && w.stage < 2).length;
+  const fresh = total - known - learning;
+  if(total){
+    $('#mem-track').innerHTML =
+      `<i class="prog-known" style="width:${(known/total*100).toFixed(1)}%"></i>` +
+      `<i class="prog-learning" style="width:${(learning/total*100).toFixed(1)}%"></i>` +
+      `<i class="prog-new" style="width:${(fresh/total*100).toFixed(1)}%"></i>`;
+    $('#mem-text').textContent = `已记住 ${known} · 学习中 ${learning} · 未学 ${fresh} · 共 ${total}`;
+  }
   const has = DB.words.length > 0;
   $('#btn-start').disabled = (dueCount() + Math.min(newCount(), DB.settings.dailyNew)) === 0;
   if(!has){
@@ -610,13 +680,15 @@ function reveal(item, spellRight){
           <div class="q-word" style="font-size:24px">${esc(w.meaning)}</div>
           <div class="reveal ok">
             <div class="r-label">✅ 拼写正确</div>
-            <div class="r-word">${esc(w.word)}</div>
+            <div class="r-word">${esc(w.word)}${stageTag(w)}</div>
             ${w.phonetic ? `<div class="q-ph">${esc(w.phonetic)}</div>` : ''}
             <div style="margin-top:12px"><button class="speak-btn" id="spk2">🔊</button></div>
+            <div class="r-ex" id="ex-box">📖 例句获取中…</div>
           </div>
           <button class="btn big sub-btn" id="next">继续</button>
         </div>`;
       $('#spk2').addEventListener('click', () => speak(w.word));
+      fillExample(w);
       bindNext('#next');
       return;
     }
@@ -626,9 +698,10 @@ function reveal(item, spellRight){
         <div class="q-word" style="font-size:24px">${esc(w.meaning)}</div>
         <div class="reveal bad">
           <div class="r-label">❌ 拼错了,正确答案</div>
-          <div class="r-word">${esc(w.word)}</div>
+          <div class="r-word">${esc(w.word)}${stageTag(w)}</div>
           ${w.phonetic ? `<div class="q-ph">${esc(w.phonetic)}</div>` : ''}
           <div style="margin-top:12px"><button class="speak-btn" id="spk2">🔊</button></div>
+          <div class="r-ex" id="ex-box">📖 例句获取中…</div>
         </div>
         <div class="grade-row">
           <button class="grade fuzzy" data-g="fuzzy">模糊</button>
@@ -637,18 +710,20 @@ function reveal(item, spellRight){
         <button class="skip" id="skip">跳过这个词</button>
       </div>`;
     $('#spk2').addEventListener('click', () => speak(w.word));
+    fillExample(w);
     $$('.grade').forEach(b => b.addEventListener('click', () => { grade(item, b.dataset.g); nextCard(); }));
     bindSkip('#skip');
   } else {
     body.innerHTML = `
       <div class="card-enter">
         <div class="q-label">英文单词</div>
-        <div class="q-word">${esc(w.word)}</div>
+        <div class="q-word">${esc(w.word)}${stageTag(w)}</div>
         ${w.phonetic ? `<div class="q-ph">${esc(w.phonetic)}</div>` : ''}
         <div style="margin-top:8px"><button class="speak-btn" id="spk2">🔊</button></div>
         <div class="reveal">
           <div class="r-label">参考释义</div>
           <div class="r-meaning">${esc(w.meaning)}</div>
+          <div class="r-ex" id="ex-box">📖 例句获取中…</div>
         </div>
         <div class="grade-row">
           <button class="grade know" data-g="know">认识</button>
@@ -658,6 +733,7 @@ function reveal(item, spellRight){
         <button class="skip" id="skip">跳过这个词</button>
       </div>`;
     $('#spk2').addEventListener('click', () => speak(w.word));
+    fillExample(w);
     $$('.grade').forEach(b => b.addEventListener('click', () => { grade(item, b.dataset.g); nextCard(); }));
     bindSkip('#skip');
   }
@@ -744,6 +820,7 @@ $('#lib-search').addEventListener('input', renderLib);
 /* ===== 联想搜索(谷歌建议,JSONP 绕过跨域) ===== */
 const POS_MAP = { '名词':'n.', '动词':'v.', '形容词':'adj.', '副词':'adv.', '代词':'pron.', '介词':'prep.', '连词':'conj.', '感叹词':'interj.', '助词':'part.', '冠词':'art.', '数词':'num.' };
 let sugTimer, sugIndex = -1;
+let pendingEx = null;
 const sugBox = $('#sug-box');
 
 function hideSug(){ sugBox.classList.add('hidden'); sugBox.innerHTML = ''; sugIndex = -1; }
@@ -877,6 +954,7 @@ async function doLookup(){
           }
         }catch(e){}
       }
+      pendingEx = await grabExample(en);  // 顺手抓例句
       $('#add-word').value = en;          // 英文词填入单词框
       $('#add-meaning').value = raw;      // 你输入的中文就是释义
       if(phonetic) $('#add-phonetic').value = phonetic;
@@ -918,6 +996,7 @@ async function doLookup(){
         if(ex) meaning = ex;
       }catch(e){}
     }
+    pendingEx = await grabExample(w);
     if(d.status === 'fulfilled' && Array.isArray(d.value) && d.value[0]){
       const e = d.value[0];
       phonetic = e.phonetic || (e.phonetics || []).map(p => p.text).find(Boolean) || '';
@@ -951,15 +1030,18 @@ function addWord(){
   if(old){
     old.phonetic = phonetic || old.phonetic;
     old.meaning = meaning;
+    if(pendingEx?.example){ old.example = pendingEx.example; old.exampleCn = pendingEx.exampleCn || old.exampleCn; }
     toast('该词已在词库,已更新释义');
   } else {
     DB.words.push({
       id: Date.now().toString(36) + Math.random().toString(36).slice(2,7),
       word, phonetic, meaning,
+      example: pendingEx?.example || '', exampleCn: pendingEx?.exampleCn || '',
       added: Date.now(), reps: 0, lapses: 0, stage: 0, due: 0
     });
     toast('已加入词库 ✓');
   }
+  pendingEx = null;
   save();
   $('#add-word').value = ''; $('#add-phonetic').value = ''; $('#add-meaning').value = '';
   renderLib();
