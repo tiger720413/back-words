@@ -535,9 +535,8 @@ function speakFallback(text){
 }
 
 /* ===== 例句与记忆标签 ===== */
-function confirmDots(w){
-  const n = w.todayStreak || 0;
-  return '<span class="cdots">' + [1,2,3].map(i => `<i class="${i <= n ? 'ok' : ''}"></i>`).join('') + '</span>';
+function confirmDots(n){
+  return '<span class="cdots">' + [1,2,3].map(i => `<i class="${i <= (n || 0) ? 'ok' : ''}"></i>`).join('') + '</span>';
 }
 function stageTag(w){
   return !w.reps ? '<span class="stage-tag stage-new">新词</span>'
@@ -698,6 +697,7 @@ function renderCard(){
   const item = session.queue[session.i];
   const body = $('#ov-body');
   const done = session.queue.filter(it => it.done).length;
+  const curStreak = session.warm ? (item.streak || 0) : (item.w.todayStreak || 0);
   $('#ov-progress').textContent = `${done} / ${session.queue.length}`;
   $('#ov-bar').style.width = (done / session.queue.length * 100) + '%';
 
@@ -705,7 +705,7 @@ function renderCard(){
     body.innerHTML = `
       <div class="card-enter">
         <div class="q-label">写出这个单词的中文释义</div>
-        ${session.warm ? '' : `<div class="confirm-line">${confirmDots(item.w)} 连续确认 ${item.w.todayStreak || 0}/3</div>`}
+        <div class="confirm-line">${confirmDots(curStreak)} 连续确认 ${curStreak}/3</div>
         <div class="q-word">${esc(item.w.word)}</div>
         ${item.w.phonetic ? `<div class="q-ph">${esc(item.w.phonetic)}</div>` : ''}
         <button class="speak-btn" id="spk">🔊</button>
@@ -723,7 +723,7 @@ function renderCard(){
     body.innerHTML = `
       <div class="card-enter">
         <div class="q-label">根据中文释义拼出英文单词</div>
-        ${session.warm ? '' : `<div class="confirm-line">${confirmDots(item.w)} 连续确认 ${item.w.todayStreak || 0}/3</div>`}
+        <div class="confirm-line">${confirmDots(curStreak)} 连续确认 ${curStreak}/3</div>
         <div class="q-word" style="font-size:26px">${esc(item.w.meaning)}</div>
         <div class="answer-box">
           <input type="text" id="ans" placeholder="输入英文单词…" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -746,6 +746,7 @@ function renderCard(){
 function reveal(item, spellRight){
   const body = $('#ov-body');
   const w = item.w;
+  const curStreak = session.warm ? (item.streak || 0) : (w.todayStreak || 0);
   if(item.dir === 'cn2en'){
     if(spellRight){
       grade(item, 'know');   // 拼对了直接按"认识"计
@@ -754,9 +755,9 @@ function reveal(item, spellRight){
           <div class="q-label">中文释义</div>
           <div class="q-word" style="font-size:24px">${esc(w.meaning)}</div>
           <div class="reveal ok">
-            <div class="r-label">✅ 拼写正确${session.warm ? ',温习过关!' : (item.done ? ',连续 3 次确认,今天过关!' : `,还需确认 ${3 - (w.todayStreak || 0)} 次`)}</div>
+            <div class="r-label">✅ 拼写正确${item.done ? (session.warm ? ',连续 3 次确认,温习过关!' : ',连续 3 次确认,今天过关!') : `,还需确认 ${3 - curStreak} 次`}</div>
             <div class="r-word">${esc(w.word)}${stageTag(w)}</div>
-            ${session.warm ? '' : `<div class="confirm-line">${confirmDots(w)} 连续确认 ${w.todayStreak || 0}/3</div>`}
+            <div class="confirm-line">${confirmDots(curStreak)} 连续确认 ${curStreak}/3</div>
             ${w.phonetic ? `<div class="q-ph">${esc(w.phonetic)}</div>` : ''}
             <div style="margin-top:12px"><button class="speak-btn" id="spk2">🔊</button></div>
             <div class="r-ex" id="ex-box">📖 例句获取中…</div>
@@ -846,9 +847,12 @@ function grade(item, g){
   }
   if(g === 'know'){
     if(isWarm){
-      item.done = true;   // 温习:一次认识就过
-      w.stage = Math.min(w.stage + 1, INTERVALS.length - 1);
-      w.due = now + INTERVALS[w.stage] * DAY;
+      item.streak = (item.streak || 0) + 1;
+      if(item.streak >= 3){
+        item.done = true;   // 温习也要连续确认 3 次
+        w.stage = Math.min(w.stage + 1, INTERVALS.length - 1);
+        w.due = now + INTERVALS[w.stage] * DAY;
+      }
     } else {
       w.todayStreak = (w.todayStreak || 0) + 1;
       if(w.todayStreak >= 3){
@@ -859,12 +863,12 @@ function grade(item, g){
     }
     session.know++;
   } else if(g === 'fuzzy'){
-    if(!isWarm) w.todayStreak = 0;
+    if(isWarm) item.streak = 0; else w.todayStreak = 0;
     w.stage = Math.max(1, w.stage - 1);
     w.due = now + INTERVALS[w.stage] * DAY * 0.5;
     session.fuzzy++;
   } else {
-    if(!isWarm) w.todayStreak = 0;
+    if(isWarm) item.streak = 0; else w.todayStreak = 0;
     w.stage = 1;
     w.due = now + 10 * MIN;   // 10 分钟后再出现一次,今天内巩固
     w.lapses++;
