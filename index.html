@@ -108,6 +108,11 @@
   .stage-new{background:#eef2fb;color:var(--muted)}
   .stage-learn{background:var(--amber-bg);color:var(--amber)}
   .stage-known{background:var(--green-bg);color:var(--green)}
+  /* 连续确认圆点(3 次过关) */
+  .cdots{display:inline-flex;gap:6px;vertical-align:middle;margin-right:6px}
+  .cdots i{width:12px;height:12px;border-radius:50%;border:2px solid #c5d3ef;background:#fff}
+  .cdots i.ok{background:var(--green);border-color:var(--green)}
+  .confirm-line{font-size:13px;color:var(--muted);margin-top:8px}
   .icon-btn{flex-shrink:0;background:transparent;font-size:16px;color:#b7c0d0;padding:4px}
   .icon-btn:hover{color:var(--red)}
   .icon-btn.spk:hover{color:var(--blue)}
@@ -200,7 +205,7 @@
   <!-- ============ 学习页 ============ -->
   <section id="view-home">
     <div class="stat-row" style="margin-bottom:14px">
-      <div class="stat"><div class="num" id="st-due">0</div><div class="label">今日待复习</div></div>
+      <div class="stat"><div class="num" id="st-due">0</div><div class="label">今日待学习</div></div>
       <div class="stat"><div class="num new" id="st-new">0</div><div class="label">新词未学</div></div>
       <div class="stat"><div class="num" id="st-streak">0</div><div class="label">连续天数 🔥</div></div>
     </div>
@@ -524,6 +529,10 @@ function speakFallback(text){
 }
 
 /* ===== 例句与记忆标签 ===== */
+function confirmDots(w){
+  const n = w.todayStreak || 0;
+  return '<span class="cdots">' + [1,2,3].map(i => `<i class="${i <= n ? 'ok' : ''}"></i>`).join('') + '</span>';
+}
 function stageTag(w){
   return !w.reps ? '<span class="stage-tag stage-new">新词</span>'
     : w.stage >= 2 ? '<span class="stage-tag stage-known">已记住</span>'
@@ -575,6 +584,20 @@ function showTab(name){
 $$('.tabbar button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
 /* ================= 学习页 ================= */
+/* 今天连续确认 3 次 = 过关 */
+function doneToday(w){
+  return w.todayDate === dayKey(Date.now()) && (w.todayStreak || 0) >= 3;
+}
+/* 今日学习队列:没过关的今天一直在;今天见过的没过关的优先,复习到期其次,新词按剩余配额 */
+function todayQueue(){
+  const today = dayKey(Date.now());
+  const e = endOfToday();
+  const review = DB.words.filter(w => w.reps > 0 && !doneToday(w) && (w.todayDate === today || w.due <= e))
+    .sort((a,b) => ((b.todayDate === today) ? 1 : 0) - ((a.todayDate === today) ? 1 : 0) || a.due - b.due);
+  const quota = Math.max(0, DB.settings.dailyNew - DB.stats.learnedToday);
+  const fresh = DB.words.filter(w => w.reps === 0).slice(0, quota);
+  return [...review, ...fresh];
+}
 function dueCount(){
   const e = endOfToday();
   return DB.words.filter(w => w.reps > 0 && w.due <= e).length;
@@ -582,23 +605,24 @@ function dueCount(){
 function newCount(){ return DB.words.filter(w => w.reps === 0).length; }
 
 function renderHome(){
-  $('#st-due').textContent = dueCount();
+  const tKey = dayKey(Date.now());
+  $('#st-due').textContent = todayQueue().length;
   $('#st-new').textContent = newCount();
   $('#st-streak').textContent = DB.stats.streak;
-  // 记忆进度条:绿=已记住(连续2次认识) 蓝=学习中 灰=未学
+  // 记忆进度条:按"今天第一次反应"判断——首见即会=绿,首见没认出=蓝,还没轮到=灰
   const total = DB.words.length;
-  const known = DB.words.filter(w => w.stage >= 2).length;
-  const learning = DB.words.filter(w => w.reps > 0 && w.stage < 2).length;
+  const known = DB.words.filter(w => w.todayDate === tKey && w.todayFirst === 'know').length;
+  const learning = DB.words.filter(w => w.todayDate === tKey && w.todayFirst === 'miss').length;
   const fresh = total - known - learning;
   if(total){
     $('#mem-track').innerHTML =
       `<i class="prog-known" style="width:${(known/total*100).toFixed(1)}%"></i>` +
       `<i class="prog-learning" style="width:${(learning/total*100).toFixed(1)}%"></i>` +
       `<i class="prog-new" style="width:${(fresh/total*100).toFixed(1)}%"></i>`;
-    $('#mem-text').textContent = `已记住 ${known} · 学习中 ${learning} · 未学 ${fresh} · 共 ${total}`;
+    $('#mem-text').textContent = `今日首见即会 ${known} · 今日在练 ${learning} · 还没轮到 ${fresh} · 共 ${total}`;
   }
   const has = DB.words.length > 0;
-  $('#btn-start').disabled = (dueCount() + Math.min(newCount(), DB.settings.dailyNew)) === 0;
+  $('#btn-start').disabled = todayQueue().length === 0;
   if(!has){
     $('#home-hint').innerHTML = '词库还是空的,先去「词库」页添加你的单词吧';
   }
@@ -632,13 +656,11 @@ $('#ov-quit').addEventListener('click', () => {
 });
 
 function startSession(){
-  const e = endOfToday();
-  const reviews = DB.words.filter(w => w.reps > 0 && w.due <= e).sort((a,b) => a.due - b.due);
-  const fresh = DB.words.filter(w => w.reps === 0).slice(0, DB.settings.dailyNew);
-  const queue = [...reviews, ...fresh].map(w => ({
+  const queue = todayQueue().map(w => ({
     w,
     dir: DB.settings.dir === 'mix' ? (Math.random() < 0.5 ? 'en2cn' : 'cn2en') : DB.settings.dir,
-    skipped: false
+    skipped: false,
+    done: false
   }));
   if(!queue.length){ toast('今日任务已完成 🎉'); return; }
   session = { queue, i: 0, know: 0, fuzzy: 0, forgot: 0 };
@@ -649,13 +671,15 @@ function startSession(){
 function renderCard(){
   const item = session.queue[session.i];
   const body = $('#ov-body');
-  $('#ov-progress').textContent = `${session.i + 1} / ${session.queue.length}`;
-  $('#ov-bar').style.width = ((session.i + 1) / session.queue.length * 100) + '%';
+  const done = session.queue.filter(it => it.done).length;
+  $('#ov-progress').textContent = `${done} / ${session.queue.length}`;
+  $('#ov-bar').style.width = (done / session.queue.length * 100) + '%';
 
   if(item.dir === 'en2cn'){
     body.innerHTML = `
       <div class="card-enter">
         <div class="q-label">写出这个单词的中文释义</div>
+        <div class="confirm-line">${confirmDots(item.w)} 连续确认 ${item.w.todayStreak || 0}/3</div>
         <div class="q-word">${esc(item.w.word)}</div>
         ${item.w.phonetic ? `<div class="q-ph">${esc(item.w.phonetic)}</div>` : ''}
         <button class="speak-btn" id="spk">🔊</button>
@@ -673,6 +697,7 @@ function renderCard(){
     body.innerHTML = `
       <div class="card-enter">
         <div class="q-label">根据中文释义拼出英文单词</div>
+        <div class="confirm-line">${confirmDots(item.w)} 连续确认 ${item.w.todayStreak || 0}/3</div>
         <div class="q-word" style="font-size:26px">${esc(item.w.meaning)}</div>
         <div class="answer-box">
           <input type="text" id="ans" placeholder="输入英文单词…" autocomplete="off" autocapitalize="off" spellcheck="false">
@@ -703,8 +728,9 @@ function reveal(item, spellRight){
           <div class="q-label">中文释义</div>
           <div class="q-word" style="font-size:24px">${esc(w.meaning)}</div>
           <div class="reveal ok">
-            <div class="r-label">✅ 拼写正确</div>
+            <div class="r-label">✅ 拼写正确${item.done ? ',连续 3 次确认,今天过关!' : `,还需确认 ${3 - (w.todayStreak || 0)} 次`}</div>
             <div class="r-word">${esc(w.word)}${stageTag(w)}</div>
+            <div class="confirm-line">${confirmDots(w)} 连续确认 ${w.todayStreak || 0}/3</div>
             ${w.phonetic ? `<div class="q-ph">${esc(w.phonetic)}</div>` : ''}
             <div style="margin-top:12px"><button class="speak-btn" id="spk2">🔊</button></div>
             <div class="r-ex" id="ex-box">📖 例句获取中…</div>
@@ -780,26 +806,37 @@ function bindSkip(sel){
   });
 }
 
-/* 按评级更新记忆曲线并统计 */
+/* 墨墨式评级:今天的第一次反应决定进度条颜色;连续 3 次"认识"才过关 */
 function grade(item, g){
   const w = item.w;
   const now = Date.now();
+  const today = dayKey(now);
+  if(w.todayDate !== today){
+    w.todayDate = today;
+    w.todayFirst = g === 'know' ? 'know' : 'miss';
+    w.todayStreak = 0;
+  }
   if(g === 'know'){
-    w.stage = Math.min(w.stage + 1, INTERVALS.length - 1);
-    w.due = now + INTERVALS[w.stage] * DAY;
+    w.todayStreak = (w.todayStreak || 0) + 1;
+    if(w.todayStreak >= 3){
+      item.done = true;   // 连续确认 3 次,今天过关
+      w.stage = Math.min(w.stage + 1, INTERVALS.length - 1);
+      w.due = now + INTERVALS[w.stage] * DAY;
+    }
     session.know++;
   } else if(g === 'fuzzy'){
+    w.todayStreak = 0;
     w.stage = Math.max(1, w.stage - 1);
     w.due = now + INTERVALS[w.stage] * DAY * 0.5;
     session.fuzzy++;
   } else {
+    w.todayStreak = 0;
     w.stage = 1;
     w.due = now + 10 * MIN;   // 10 分钟后再出现一次,今天内巩固
     w.lapses++;
     session.forgot++;
   }
   // 统计与连续天数
-  const today = dayKey(now);
   if(DB.stats.lastDay !== today){
     DB.stats.streak = (DB.stats.lastDay === dayKey(now - DAY)) ? DB.stats.streak + 1 : 1;
     DB.stats.lastDay = today;
@@ -812,9 +849,14 @@ function grade(item, g){
 }
 
 function nextCard(){
-  session.i++;
-  if(session.i >= session.queue.length) showSummary();
-  else renderCard();
+  const q = session.queue;
+  if(q.every(it => it.done)){ showSummary(); return; }
+  // 循环找下一个没过关的词:没"会"的词会一直重复出现
+  for(let k = 0; k < q.length; k++){
+    session.i = (session.i + 1) % q.length;
+    if(!q[session.i].done) break;
+  }
+  renderCard();
 }
 
 function showSummary(){
@@ -824,9 +866,10 @@ function showSummary(){
   $('#ov-body').innerHTML = `
     <div class="card-enter summary">
       <div class="big">🎉</div>
-      <div style="font-size:20px;font-weight:700">本轮完成</div>
+      <div style="font-size:20px;font-weight:700">今日任务全部完成 🎉</div>
       <div class="rows">
-        <div>学习 <b>${total}</b></div>
+        <div>今日过关 <b style="color:var(--green)">${session.queue.filter(it => it.done).length} / ${session.queue.length}</b></div>
+        <div>学习次数 <b>${total}</b></div>
         <div>认识 <b style="color:var(--green)">${session.know}</b></div>
         <div>模糊 <b style="color:var(--amber)">${session.fuzzy}</b></div>
         <div>忘记 <b style="color:var(--red)">${session.forgot}</b></div>
