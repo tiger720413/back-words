@@ -504,14 +504,20 @@ if('speechSynthesis' in window){
   speechSynthesis.onvoiceschanged = refreshVoices;
 }
 function speak(text){
-  /* 三级发音源:有道直连(0.3秒,不走代理不卡)→ 谷歌TTS(需代理)→ 浏览器语音。
-     全部播完整音频文件,不卡音不吞开头 */
-  if(curAudio){ try{ curAudio.pause(); }catch(e){} curAudio = null; }
-  const a = new Audio(`https://dict.youdao.com/dictvoice?audio=${encodeURIComponent(text)}&type=2`);
-  curAudio = a;
-  a.onended = () => { if(curAudio === a) curAudio = null; };
-  a.onerror = () => { if(curAudio === a) curAudio = null; speakG(text); };
-  a.play().catch(() => { if(curAudio === a) curAudio = null; speakG(text); });
+  /* 优先本地语音(离线、不依赖代理);浏览器不支持语音合成时才走有道/谷歌音频 */
+  if('speechSynthesis' in window){
+    const ss = speechSynthesis;
+    ss.cancel();
+    refreshVoices();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'en-US'; u.rate = 0.9;
+    const v = voiceList.find(v => v.lang.startsWith('en') && v.localService);
+    if(v) u.voice = v;
+    if(ss.paused) ss.resume();
+    ss.speak(u);
+    return;
+  }
+  speakG(text);
 }
 function speakG(text){
   const a = new Audio(`https://translate.googleapis.com/translate_tts?client=gtx&tl=en&q=${encodeURIComponent(text)}`);
@@ -781,10 +787,10 @@ function reveal(item, spellRight){
           <div class="r-ex" id="ex-box">📖 例句获取中…</div>
         </div>
         <div class="grade-row">
-          <button class="grade fuzzy" data-g="fuzzy">模糊</button>
-          <button class="grade forgot" data-g="forgot">忘记</button>
+          <button class="grade fuzzy" data-g="fuzzy">模糊·明天再见</button>
+          <button class="grade forgot" data-g="forgot">忘记·马上重学</button>
         </div>
-        <button class="skip" id="skip">跳过这个词</button>
+        <button class="skip" id="skip">我会了,直接过</button>
       </div>`;
     $('#spk2').addEventListener('click', () => speak(w.word));
     fillExample(w);
@@ -804,10 +810,10 @@ function reveal(item, spellRight){
         </div>
         <div class="grade-row">
           <button class="grade know" data-g="know">认识</button>
-          <button class="grade fuzzy" data-g="fuzzy">模糊</button>
-          <button class="grade forgot" data-g="forgot">忘记</button>
+          <button class="grade fuzzy" data-g="fuzzy">模糊·明天再见</button>
+          <button class="grade forgot" data-g="forgot">忘记·马上重学</button>
         </div>
-        <button class="skip" id="skip">跳过这个词</button>
+        <button class="skip" id="skip">我会了,直接过</button>
       </div>`;
     $('#spk2').addEventListener('click', () => speak(w.word));
     fillExample(w);
@@ -823,14 +829,36 @@ function bindNext(sel){
   });
 }
 function bindSkip(sel){
-  const b = $(sel);
-  if(session.queue[session.i].skipped || session.queue.length <= 1) b.remove();
-  else b.addEventListener('click', () => {
-    const item = session.queue[session.i];
-    item.skipped = true;
-    session.queue.push(item);
-    nextCard();
-  });
+  $(sel).addEventListener('click', skipCard);
+}
+/* 跳过 = 已经会了,直接过关 */
+function skipCard(){
+  const item = session.queue[session.i];
+  const w = item.w;
+  const now = Date.now();
+  const today = dayKey(now);
+  if(session.warm){
+    item.streak = 3;
+  } else {
+    if(w.todayDate !== today){ w.todayDate = today; w.todayFirst = 'know'; w.todayStreak = 0; }
+    w.todayStreak = 3;
+  }
+  item.done = true;
+  w.stage = Math.min(w.stage + 1, INTERVALS.length - 1);
+  w.due = now + INTERVALS[w.stage] * DAY;
+  session.know++;
+  if(!session.warm){
+    if(DB.stats.lastDay !== today){
+      DB.stats.streak = (DB.stats.lastDay === dayKey(now - DAY)) ? DB.stats.streak + 1 : 1;
+      DB.stats.lastDay = today;
+      DB.stats.reviewedToday = 0;
+      DB.stats.learnedToday = 0;
+    }
+    if(w.reps === 0){ DB.stats.learnedToday++; w.reps = 1; }
+    else DB.stats.reviewedToday++;
+  }
+  save();
+  nextCard();
 }
 
 /* 墨墨式评级:今天的第一次反应决定进度条颜色;连续 3 次"认识"才过关。
@@ -863,14 +891,15 @@ function grade(item, g){
     }
     session.know++;
   } else if(g === 'fuzzy'){
+    // 模糊:记忆等级不降,确认计数清零,明天再复习一次
     if(isWarm) item.streak = 0; else w.todayStreak = 0;
-    w.stage = Math.max(1, w.stage - 1);
-    w.due = now + INTERVALS[w.stage] * DAY * 0.5;
+    w.due = now + 0.5 * DAY;
     session.fuzzy++;
   } else {
+    // 忘记:等级打回 1,10 分钟后马上重学
     if(isWarm) item.streak = 0; else w.todayStreak = 0;
     w.stage = 1;
-    w.due = now + 10 * MIN;   // 10 分钟后再出现一次,今天内巩固
+    w.due = now + 10 * MIN;
     w.lapses++;
     session.forgot++;
   }
